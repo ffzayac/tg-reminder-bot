@@ -13,8 +13,8 @@ from zoneinfo import ZoneInfo
 
 
 load_dotenv()  # читает .env в текущей директории
-
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+ENV = os.getenv("ENV", "PROD")
+BOT_TOKEN = os.getenv("PROD_BOT_TOKEN") if ENV == "PROD" else os.getenv("TEST_BOT_TOKEN")
 FILE_SCHEDULE = os.getenv("FILE_SCHEDULE")
 # print(BOT_TOKEN)
 
@@ -93,8 +93,6 @@ def schedule_meeting_jobs(meetings, chat_id, job_queue):
                 data={"reminder": reminder, "meeting": meeting},
                 name=f"{chat_id}_{start_at.isoformat()}_{reminder}",
             )
-    
-    print(job_queue.jobs())
 
 
 async def schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -117,15 +115,23 @@ async def schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def get_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("*****************************")
-    print(context.job_queue.jobs())
+    schedule = []
+    message = ""
+
+    for job in context.job_queue.jobs():
+        if job.data['meeting'] not in schedule:
+            schedule.append(job.data['meeting'])
+
+    for meeting in schedule:
+        message += " ".join((meeting['start_at'].strftime('%Y-%m-%d %H:%M'), meeting['title'], meeting['dion'], "\n\n"))
+
+    await update.message.reply_text(message)
 
 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    # app.add_handler(CommandHandler("remind10", remind_in_10))
     app.add_handler(CommandHandler("schedule", schedule))
     app.add_handler(CommandHandler("get_schedule", get_schedule))
 
