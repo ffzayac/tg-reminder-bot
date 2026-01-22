@@ -126,7 +126,18 @@ async def get_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for meeting in schedule:
         message += " ".join((meeting['start_at'].strftime('%Y-%m-%d %H:%M'), meeting['title'], meeting['dion'], "\n\n"))
 
-    await update.message.reply_text(message)
+    await update.message.reply_text(message or "Расписание пусто!")
+
+
+async def clear_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Get a list of all currently scheduled jobs
+    all_jobs = context.job_queue.jobs()
+
+    # Remove each job
+    for job in all_jobs:
+        job.remove()
+
+    await update.message.reply_text("Расписание очищено!")
 
 
 async def add_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -211,6 +222,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("schedule", schedule))
     app.add_handler(CommandHandler("get_schedule", get_schedule))
+    app.add_handler(CommandHandler("clear_schedule", clear_schedule))
     
     add_conv_handler = ConversationHandler(
         entry_points=[CommandHandler("add_event", add_event)],
