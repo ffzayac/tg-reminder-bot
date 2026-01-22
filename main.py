@@ -5,6 +5,7 @@ from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
+    ConversationHandler,
     MessageHandler,
     ContextTypes,
     filters,
@@ -16,7 +17,7 @@ load_dotenv()  # читает .env в текущей директории
 ENV = os.getenv("ENV", "PROD")
 BOT_TOKEN = os.getenv("PROD_BOT_TOKEN") if ENV == "PROD" else os.getenv("TEST_BOT_TOKEN")
 FILE_SCHEDULE = os.getenv("FILE_SCHEDULE")
-# print(BOT_TOKEN)
+ASK_DATE, ASK_TIME, ASK_TITLE, ASK_LOCATION = range(4)
 
 
 def read_schedule_csv(filename: str) -> list:
@@ -128,12 +129,101 @@ async def get_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(message)
 
 
+async def add_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Введите дату события в формате ГГГГ-ММ-ДД (например, 2026-01-21)")
+    return ASK_DATE
+
+
+async def ask_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    try:
+        date = datetime.strptime(text, "%Y-%m-%d").date()
+    except ValueError:
+        await update.message.reply_text("Неверный формат даты. Попробуйте ещё раз: ГГГГ-ММ-ДД")
+        return ASK_DATE
+
+    context.user_data["new_event"] = {"date": date}
+    await update.message.reply_text("Введите время события в формате ЧЧ:ММ (например, 14:30)")
+    return ASK_TIME
+
+
+async def ask_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    try:
+        time = datetime.strptime(text, "%H:%M").time()
+    except ValueError:
+        await update.message.reply_text("Неверный формат времени. Попробуйте ещё раз: ЧЧ:ММ")
+        return ASK_TIME
+
+    context.user_data["new_event"]["time"] = time
+    await update.message.reply_text("Введите название события")
+    return ASK_TITLE
+
+
+async def ask_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+
+    context.user_data["new_event"]["title"] = text
+    await update.message.reply_text("Введите место события")
+    return ASK_LOCATION
+
+
+async def ask_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+
+    context.user_data["new_event"]["location"] = text
+    event = context.user_data["new_event"]
+    
+    start_at = datetime.combine(event['date'], event['time'])
+
+    meetings = [{
+        "title": event['title'],
+        "start_at": start_at,
+        "dion": event['location']
+        },
+    ]
+    
+    chat_id = update.effective_chat.id
+
+    schedule_meeting_jobs(meetings, chat_id, context.job_queue)
+
+    message = (
+        "Событие добавлено:\n\n"
+        f"Дата: {event['date'].isoformat()}\n"
+        f"Время: {event['time'].strftime('%H:%M')}\n"
+        f"Название: {event['title']}\n"
+        f"Место: {event['location']}"
+    )
+
+    await update.message.reply_text(message)
+    return ConversationHandler.END
+
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data.pop("new_event", None)
+    await update.message.reply_text("Добавление события отменено.")
+    return ConversationHandler.END
+
+
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("schedule", schedule))
     app.add_handler(CommandHandler("get_schedule", get_schedule))
+    
+    add_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("add_event", add_event)],
+        states={
+            ASK_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_date)],
+            ASK_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_time)],
+            ASK_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_title)],
+            ASK_LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_location)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    app.add_handler(add_conv_handler)
 
     app.run_polling()  # запускает long polling и слушает апдейты
 
