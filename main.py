@@ -1,7 +1,7 @@
 import csv, os
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
-from telegram import Update
+from telegram import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -14,10 +14,32 @@ from zoneinfo import ZoneInfo
 
 
 load_dotenv()  # читает .env в текущей директории
+
 ENV = os.getenv("ENV", "PROD")
 BOT_TOKEN = os.getenv("PROD_BOT_TOKEN") if ENV == "PROD" else os.getenv("TEST_BOT_TOKEN")
 FILE_SCHEDULE = os.getenv("FILE_SCHEDULE")
 ASK_DATE, ASK_TIME, ASK_TITLE, ASK_LOCATION = range(4)
+
+BASE_COMMANDS = [
+    BotCommand("schedule", "запланировать"),
+    BotCommand("get_schedule", "получить расписание"),
+    BotCommand("add_event", "добавить событие"),
+    BotCommand("clear_schedule", "очистить расписание"),
+]
+
+CONV_COMMANDS = BASE_COMMANDS + [
+    BotCommand("cancel", "отменить добавление"),
+]
+
+
+async def set_base_commands_for_chat(bot, chat_id: int):
+    scope = BotCommandScopeChat(chat_id)
+    await bot.set_my_commands(BASE_COMMANDS, scope=scope)
+
+
+async def set_conv_commands_for_chat(bot, chat_id: int):
+    scope = BotCommandScopeChat(chat_id)
+    await bot.set_my_commands(CONV_COMMANDS, scope=scope)
 
 
 def read_schedule_csv(filename: str) -> list:
@@ -141,7 +163,11 @@ async def clear_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def add_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+
+    await set_conv_commands_for_chat(context.bot, chat_id)
     await update.message.reply_text("Введите дату события в формате ГГГГ-ММ-ДД (например, 2026-01-21)")
+    
     return ASK_DATE
 
 
@@ -197,6 +223,7 @@ async def ask_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     chat_id = update.effective_chat.id
 
     schedule_meeting_jobs(meetings, chat_id, context.job_queue)
+    await set_base_commands_for_chat(context.bot, chat_id)
 
     message = (
         "Событие добавлено:\n\n"
@@ -207,12 +234,19 @@ async def ask_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     )
 
     await update.message.reply_text(message)
+    context.user_data.pop("new_event", None)
+
     return ConversationHandler.END
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data.pop("new_event", None)
+    chat_id = update.effective_chat.id
+    
+    await set_base_commands_for_chat(context.bot, chat_id)
+    
     await update.message.reply_text("Добавление события отменено.")
+    context.user_data.pop("new_event", None)
+
     return ConversationHandler.END
 
 
