@@ -119,6 +119,7 @@ def schedule_meeting_jobs(meetings, chat_id, job_queue):
                 data={"reminder": reminder, "meeting": meeting},
                 name=f"{chat_id}_{start_at.isoformat()}_{reminder}",
             )
+        print(job_queue.jobs()[0].id)
 
 
 async def schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):

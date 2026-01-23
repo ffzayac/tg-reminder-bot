@@ -18,6 +18,8 @@ def get_connection():
 def init_db():
     conn = get_connection()
     cur = conn.cursor()
+    
+    # таблица событий
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS events (
@@ -31,6 +33,19 @@ def init_db():
         );
         """
     )
+
+    # Таблица уведомлений по событиям
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id INTEGER NOT NULL,
+            job_id INTEGER NOT NULL,
+            FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+        );
+        """
+    )
+
     conn.commit()
     conn.close()
 
