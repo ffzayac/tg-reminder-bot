@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 
 load_dotenv()  # читает .env в текущей директории
 
+DION_URL = "https://dion.vc/event/"
 ENV = os.getenv("ENV", "PROD")
 BOT_TOKEN = os.getenv("PROD_BOT_TOKEN") if ENV == "PROD" else os.getenv("TEST_BOT_TOKEN")
 FILE_SCHEDULE = os.getenv("FILE_SCHEDULE")
@@ -209,7 +210,10 @@ async def ask_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def ask_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text.strip()
 
-    context.user_data["new_event"]["location"] = text
+    location = text.split(" ")
+    location = DION_URL + location[1] if len(location) == 2 and location[0] == "dion" else text
+
+    context.user_data["new_event"]["location"] = location
     event = context.user_data["new_event"]
 
     start_at = datetime.combine(event['date'], event['time'])
