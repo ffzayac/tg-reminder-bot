@@ -12,6 +12,8 @@ from telegram.ext import (
 )
 from zoneinfo import ZoneInfo
 
+from db import init_db, add_event_db, get_events_for_chat_db
+
 
 load_dotenv()  # читает .env в текущей директории
 
@@ -222,6 +224,8 @@ async def ask_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     
     chat_id = update.effective_chat.id
 
+    event_id = add_event_db(chat_id, event['title'], event['location'], start_at)
+    print(f"event_id = {event_id}")
     schedule_meeting_jobs(meetings, chat_id, context.job_queue)
     await set_base_commands_for_chat(context.bot, chat_id)
 
@@ -251,6 +255,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 def main():
+    init_db()  # создаём таблицы, если их нет
+    
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
