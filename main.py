@@ -1,7 +1,8 @@
-import csv, os
+import csv
+import os
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
-from telegram import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, Update
+from telegram import BotCommand, BotCommandScopeChat, Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -129,7 +130,7 @@ async def schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     #         "dion": "https://dion.vc/event/ilin-au-vtb"
     #     },
     # ]
-    
+
     schedule_meeting_jobs(meetings, chat_id, context.job_queue)
 
     await update.message.reply_text(
@@ -167,7 +168,7 @@ async def add_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await set_conv_commands_for_chat(context.bot, chat_id)
     await update.message.reply_text("Введите дату события в формате ГГГГ-ММ-ДД (например, 2026-01-21)")
-    
+
     return ASK_DATE
 
 
@@ -210,7 +211,7 @@ async def ask_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
     context.user_data["new_event"]["location"] = text
     event = context.user_data["new_event"]
-    
+
     start_at = datetime.combine(event['date'], event['time'])
 
     meetings = [{
@@ -219,7 +220,7 @@ async def ask_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         "dion": event['location']
         },
     ]
-    
+
     chat_id = update.effective_chat.id
 
     schedule_meeting_jobs(meetings, chat_id, context.job_queue)
@@ -241,9 +242,9 @@ async def ask_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     chat_id = update.effective_chat.id
-    
+
     await set_base_commands_for_chat(context.bot, chat_id)
-    
+
     await update.message.reply_text("Добавление события отменено.")
     context.user_data.pop("new_event", None)
 
@@ -257,7 +258,7 @@ def main():
     app.add_handler(CommandHandler("schedule", schedule))
     app.add_handler(CommandHandler("get_schedule", get_schedule))
     app.add_handler(CommandHandler("clear_schedule", clear_schedule))
-    
+
     add_conv_handler = ConversationHandler(
         entry_points=[CommandHandler("add_event", add_event)],
         states={
