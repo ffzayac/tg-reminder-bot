@@ -11,7 +11,7 @@ def get_connection():
     # но лучше создавать новое подключение на запрос.
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    
+
     return conn
 
 
