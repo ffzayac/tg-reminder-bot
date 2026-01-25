@@ -13,7 +13,7 @@ from telegram.ext import (
 )
 from zoneinfo import ZoneInfo
 
-from db import init_db, add_event_db, get_events_for_chat_db
+from db import init_db, add_event_db, add_notification, get_events_for_chat_db
 
 
 load_dotenv()  # читает .env в текущей директории
@@ -97,6 +97,7 @@ def schedule_meeting_jobs(meetings, chat_id, job_queue):
     now = datetime.now(timezone.utc)
 
     for meeting in meetings:
+        event_id = meeting["event_id"]
         start_at = meeting["start_at"]  # datetime с tzinfo
         start_at_utc = start_at.astimezone(timezone.utc)
         title = meeting["title"]
@@ -113,13 +114,16 @@ def schedule_meeting_jobs(meetings, chat_id, job_queue):
             if run_at <= now:
                 continue
 
-            job_queue.run_once(
+            job = job_queue.run_once(
                 reminder_callback,
                 when=run_at,
                 chat_id=chat_id,
                 data={"reminder": reminder, "meeting": meeting},
                 name=f"{chat_id}_{start_at.isoformat()}_{reminder}",
             )
+
+            add_notification(event_id, job.id)
+        
         print(job_queue.jobs()[0].id)
 
 
@@ -211,6 +215,7 @@ async def ask_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def ask_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    chat_id = update.effective_chat.id
     text = update.message.text.strip()
 
     location = text.split(" ")
@@ -221,17 +226,17 @@ async def ask_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
     start_at = datetime.combine(event['date'], event['time'])
 
+    event_id = add_event_db(chat_id, event['title'], event['location'], start_at)
+    print(f"event_id = {event_id}")
+
     meetings = [{
+        "event_id": event_id,
         "title": event['title'],
         "start_at": start_at,
         "dion": event['location']
         },
     ]
 
-    chat_id = update.effective_chat.id
-
-    event_id = add_event_db(chat_id, event['title'], event['location'], start_at)
-    print(f"event_id = {event_id}")
     schedule_meeting_jobs(meetings, chat_id, context.job_queue)
     await set_base_commands_for_chat(context.bot, chat_id)
 
