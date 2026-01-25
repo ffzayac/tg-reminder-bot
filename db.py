@@ -67,6 +67,23 @@ def add_event_db(chat_id: int, title: str, location: str, start_at: datetime) ->
     return event_id
 
 
+def add_notification(event_id: int, job_id: int) -> int:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        '''
+        INSERT INTO notifications(event_id, job_id)
+        VALUES (?, ?)
+        ''',
+        (event_id, job_id),
+    )
+    conn.commit()
+    notification_id = cur.lastrowid
+    conn.close()
+
+    return notification_id
+
+
 def delete_event_by_id(id: int) -> int:
     conn = get_connection()
     cur = conn.cursor()
