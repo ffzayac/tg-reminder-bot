@@ -13,7 +13,18 @@ from telegram.ext import (
 )
 from zoneinfo import ZoneInfo
 
-from db import init_db, add_event_db, add_notification_db, get_notification_by_id, update_notification_by_id, delete_event_by_id, get_notifications_by_event_id
+from db import (
+    init_db,
+    add_event_db,
+    add_notification_db,
+    get_notification_by_id,
+    update_notification_by_id,
+    delete_event_by_id,
+    get_notifications_by_event_id,
+    delete_notification_by_job,
+    delete_all_notifications,
+    get_notifation_by_job
+)
 
 
 load_dotenv()  # читает .env в текущей директории
@@ -76,6 +87,7 @@ def read_schedule_csv(filename: str) -> list:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     bot = context.bot
+
     
     await reset_chat_commands(chat_id, bot)
     await set_base_commands(bot)
@@ -84,9 +96,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def reminder_callback(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
+    notification = get_notifation_by_job(job.name)
+    cnt = len(get_notifications_by_event_id(notification["event_id"]))
+
     start_at = job.data['start_at'].astimezone(ZoneInfo("Europe/Moscow")).strftime("%Y-%m-%d %H:%M")
     message = f"{job.data['reminder']}\n\n" + f"Start at: {start_at}\n" + f"Location: {job.data['location']}"
+
     await context.bot.send_message(job.chat_id, message)
+    if cnt == 1:
+        delete_event_by_id(notification["event_id"])
+    else:
+        delete_notification_by_job(job.name)
 
 
 def add_notifications_for_event(event, chat_id, job_queue):
@@ -108,12 +128,6 @@ def add_notifications_for_event(event, chat_id, job_queue):
         notification_id = add_notification_db(event["event_id"], reminder, notify_at)
 
         schedule_notification(notification_id, chat_id, job_queue)
-
-    # print(job_queue.jobs()[0].id)
-
-
-# def add_notifications_for_event(event_id):
-#     pass
 
 
 def schedule_notification(notification_id, chat_id, job_queue):
@@ -146,6 +160,10 @@ async def schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+def reschedule_events():
+    pass
+
+
 async def get_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     schedule = []
     message = ""
@@ -171,6 +189,8 @@ async def clear_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Remove each job
     for job in all_jobs:
         job.remove()
+    
+    delete_all_notifications()
 
     await update.message.reply_text("Расписание очищено!")
 
@@ -234,7 +254,7 @@ async def ask_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     event_id = add_event_db(chat_id, event["title"], event["location"], event["start_at"])
 
     event["event_id"] = event_id
-
+    print(event)
     add_notifications_for_event(event, chat_id, context.job_queue)
     await reset_chat_commands(chat_id, bot)
 
@@ -292,19 +312,18 @@ async def ask_event_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             print(job)
             job.schedule_removal()
     
-    jobs = job_queue.jobs()
-    print(jobs)
-
     delete_event_by_id(event_id)
+    
     await reset_chat_commands(chat_id, bot)
     await update.message.reply_text(f"Событие [{event_id}] удалено.")
+
     return ConversationHandler.END
 
 
 def main():
     init_db(True if ENV == "TEST" else False)  # создаём таблицы, если их нет
     # init_db(False)
-    # get_notification_by_id(1)
+
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))

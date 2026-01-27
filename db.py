@@ -17,10 +17,12 @@ def get_connection():
 
 def init_db(reset: bool = False):
     conn = get_connection()
+    conn.execute("PRAGMA foreign_keys = ON")
     cur = conn.cursor()
     if reset:
         cur.execute("DROP TABLE notifications;")
         cur.execute("DROP TABLE events;")
+    
     # таблица событий
     cur.execute(
         """
@@ -49,6 +51,16 @@ def init_db(reset: bool = False):
             FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
         );
         """
+    )
+    
+    # удаляем просроченные события
+    cur.execute(
+        "DELETE FROM events WHERE start_at < datetime('now')"
+    )
+
+    # чистим таблицу с уведомлениями
+    cur.execute(
+        "DELETE FROM notifications"
     )
 
     conn.commit()
@@ -129,6 +141,27 @@ def get_notifications_by_event_id(event_id: int):
     return rows
 
 
+def get_notifation_by_job(job_name):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT
+            *
+        FROM 
+            notifications 
+        INNER JOIN 
+            events ON notifications.event_id = events.id
+        WHERE notifications.job_name = ?
+        """,
+        (job_name,),
+    )
+    row = cur.fetchone()
+    conn.close()
+
+    return row
+
+
 def update_notification_by_id(id, job_name, status):
     conn = get_connection()
     cur = conn.cursor()
@@ -166,6 +199,18 @@ def delete_notification_by_job(job_name):
     cur.execute(
         "DELETE FROM notifications WHERE job_name = ?",
         (job_name,),
+    )
+    conn.commit()
+    deleted = cur.rowcount
+    conn.close()
+    return deleted
+
+
+def delete_all_notifications():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "DELETE FROM notifications",
     )
     conn.commit()
     deleted = cur.rowcount
