@@ -15,10 +15,12 @@ def get_connection():
     return conn
 
 
-def init_db():
+def init_db(reset: bool = False):
     conn = get_connection()
     cur = conn.cursor()
-    
+    if reset:
+        cur.execute("DROP TABLE notifications;")
+        cur.execute("DROP TABLE events;")
     # таблица событий
     cur.execute(
         """
@@ -40,7 +42,10 @@ def init_db():
         CREATE TABLE IF NOT EXISTS notifications (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             event_id INTEGER NOT NULL,
-            job_id INTEGER NOT NULL,
+            reminder TEXT NOT NULL,
+            notify_at TEXT NOT NULL,
+            job_name TEXT,
+            status TEXT NOT NULL,
             FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
         );
         """
@@ -58,7 +63,7 @@ def add_event_db(chat_id: int, title: str, location: str, start_at: datetime) ->
         INSERT INTO events (chat_id, title, location, start_at, created_at, is_scheduled)
         VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (chat_id, title, location, start_at.isoformat(), datetime.now(tz=timezone.utc).isoformat(), 0),
+        (chat_id, title, location, start_at.astimezone(timezone.utc), datetime.now(tz=timezone.utc).isoformat(), 0),
     )
     conn.commit()
     event_id = cur.lastrowid
@@ -67,15 +72,15 @@ def add_event_db(chat_id: int, title: str, location: str, start_at: datetime) ->
     return event_id
 
 
-def add_notification(event_id: int, job_id: int) -> int:
+def add_notification_db(event_id: int, reminder: str, notify_at: int) -> int:
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
         '''
-        INSERT INTO notifications(event_id, job_id)
-        VALUES (?, ?)
+        INSERT INTO notifications(event_id, reminder, notify_at, job_name, status)
+        VALUES (?, ?, ?, ?, ?)
         ''',
-        (event_id, job_id),
+        (event_id, reminder, notify_at, None, "created"),
     )
     conn.commit()
     notification_id = cur.lastrowid
@@ -84,12 +89,83 @@ def add_notification(event_id: int, job_id: int) -> int:
     return notification_id
 
 
-def delete_event_by_id(id: int) -> int:
+def get_notification_by_id(notification_id: int):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "DELETE FROM table_name WHERE id = ?",
+        """
+        SELECT
+            *
+        FROM 
+            notifications 
+        INNER JOIN 
+            events ON notifications.event_id = events.id
+        WHERE notifications.id = ?
+        """,
+        (notification_id,),
+    )
+    row = cur.fetchone()
+    conn.close()
+
+    return row
+
+
+def get_notifications_by_event_id(event_id: int):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT
+            *
+        FROM 
+            notifications 
+        WHERE event_id = ?
+        """,
+        (event_id,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+
+    return rows
+
+
+def update_notification_by_id(id, job_name, status):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE notifications SET job_name = ?, status = ? WHERE id = ?
+        """,
+        (job_name, status, id),
+    )
+    conn.commit()
+    updated = cur.rowcount
+    conn.close()
+
+    return updated
+
+
+def delete_event_by_id(id: int) -> int:
+    conn = get_connection()
+    # для каскадного удаления
+    conn.execute("PRAGMA foreign_keys = ON")
+    cur = conn.cursor()
+    cur.execute(
+        "DELETE FROM events WHERE id = ?",
         (id,),
+    )
+    conn.commit()
+    deleted = cur.rowcount
+    conn.close()
+    return deleted
+
+
+def delete_notification_by_job(job_name):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "DELETE FROM notifications WHERE job_name = ?",
+        (job_name,),
     )
     conn.commit()
     deleted = cur.rowcount
