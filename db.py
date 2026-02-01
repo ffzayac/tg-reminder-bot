@@ -20,8 +20,8 @@ def init_db(reset: bool = False):
     conn.execute("PRAGMA foreign_keys = ON")
     cur = conn.cursor()
     if reset:
-        cur.execute("DROP TABLE notifications;")
-        cur.execute("DROP TABLE events;")
+        cur.execute("DROP TABLE IF EXISTS notifications;")
+        cur.execute("DROP TABLE IF EXISTS events;")
     
     # таблица событий
     cur.execute(
