@@ -2,7 +2,7 @@ import csv
 import os
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
-from telegram import BotCommand, BotCommandScopeChat, Update
+from telegram import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -13,6 +13,19 @@ from telegram.ext import (
 )
 from zoneinfo import ZoneInfo
 
+from db import (
+    init_db,
+    add_event_db,
+    add_notification_db,
+    get_notification_by_id,
+    update_notification_by_id,
+    delete_event_by_id,
+    get_notifications_by_event_id,
+    delete_notification_by_job,
+    delete_all_notifications,
+    get_notifation_by_job
+)
+
 
 load_dotenv()  # читает .env в текущей директории
 
@@ -20,28 +33,37 @@ DION_URL = "https://dion.vc/event/"
 ENV = os.getenv("ENV", "PROD")
 BOT_TOKEN = os.getenv("PROD_BOT_TOKEN") if ENV == "PROD" else os.getenv("TEST_BOT_TOKEN")
 FILE_SCHEDULE = os.getenv("FILE_SCHEDULE")
-ASK_DATE, ASK_TIME, ASK_TITLE, ASK_LOCATION = range(4)
+ASK_DATE, ASK_TIME, ASK_TITLE, ASK_LOCATION, ASK_EVENT_ID = range(5)
 
 BASE_COMMANDS = [
-    BotCommand("schedule", "запланировать"),
-    BotCommand("get_schedule", "получить расписание"),
     BotCommand("add_event", "добавить событие"),
+    BotCommand("delete_event", "удалить событие"),
     BotCommand("clear_schedule", "очистить расписание"),
+    BotCommand("schedule", "запланировать"),
+    BotCommand("get_schedule", "получить расписание"), 
 ]
 
-CONV_COMMANDS = BASE_COMMANDS + [
+CONV_COMMANDS = [
     BotCommand("cancel", "отменить добавление"),
 ]
 
 
-async def set_base_commands_for_chat(bot, chat_id: int):
-    scope = BotCommandScopeChat(chat_id)
+async def set_base_commands(bot):
+    # устанавливаем дефолтные команды бота
+    scope = BotCommandScopeDefault()
     await bot.set_my_commands(BASE_COMMANDS, scope=scope)
 
 
-async def set_conv_commands_for_chat(bot, chat_id: int):
-    scope = BotCommandScopeChat(chat_id)
+async def set_conv_commands(chat_id: int, bot):
+    # устанавливаем персональные команды чата в диалоге ConversationHandler
+    scope = BotCommandScopeChat(chat_id=chat_id)
     await bot.set_my_commands(CONV_COMMANDS, scope=scope)
+
+
+async def reset_chat_commands(chat_id: int, bot):
+    # удаляем персональные команды чата, чтобы снова действовал default
+    scope = BotCommandScopeChat(chat_id=chat_id)
+    await bot.delete_my_commands(scope=scope)
 
 
 def read_schedule_csv(filename: str) -> list:
@@ -63,92 +85,99 @@ def read_schedule_csv(filename: str) -> list:
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    bot = context.bot
+
+    
+    await reset_chat_commands(chat_id, bot)
+    await set_base_commands(bot)
     await update.message.reply_text("Привет! Я бот-напоминалка.")
 
 
 async def reminder_callback(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
-    reminder = job.data["reminder"]
-    meeting = job.data["meeting"]
+    notification = get_notifation_by_job(job.name)
+    cnt = len(get_notifications_by_event_id(notification["event_id"]))
 
-    message = f"{reminder}\n\n" + f"Start at: {meeting['start_at'].strftime('%Y-%m-%d %H:%M')}\n" + f"Dion: {meeting['dion']}"
+    start_at = job.data['start_at'].astimezone(ZoneInfo("Europe/Moscow")).strftime("%Y-%m-%d %H:%M")
+    message = f"{job.data['reminder']}\n\n" + f"Start at: {start_at}\n" + f"Location: {job.data['location']}"
+
     await context.bot.send_message(job.chat_id, message)
+    if cnt == 1:
+        delete_event_by_id(notification["event_id"])
+    else:
+        delete_notification_by_job(job.name)
 
 
-# async def remind_in_10(update: Update, context: ContextTypes.DEFAULT_TYPE):
-#     chat_id = update.effective_chat.id
-#     run_at = datetime.now(timezone.utc) + timedelta(seconds=15)
-#     print("Run at: {run_at}")
-
-#     context.job_queue.run_once(
-#         reminder_callback,
-#         when=run_at,
-#         chat_id=chat_id,
-#         # data={"text": "Напоминание через 10 минут нахуй!"},
-#         data={"meeting": meetings[0]},
-#         name=f"reminder_{chat_id}",
-#     )
-#     await update.message.reply_text("Ок, напомню через 10 минут!")
-
-
-def schedule_meeting_jobs(meetings, chat_id, job_queue):
+def add_notifications_for_event(event, chat_id, job_queue):
     now = datetime.now(timezone.utc)
+    start_at_utc = event["start_at"].astimezone(timezone.utc)
 
-    for meeting in meetings:
-        start_at = meeting["start_at"]  # datetime с tzinfo
-        start_at_utc = start_at.astimezone(timezone.utc)
-        title = meeting["title"]
+    # три момента напоминаний
+    times = [
+        (start_at_utc - timedelta(minutes=15), f"Через 15 минут встреча: \"{event['title']}\""),
+        (start_at_utc - timedelta(minutes=5),  f"Через 5 минут встреча: \"{event['title']}\""),
+        (start_at_utc,                         f"Встреча началась: \"{event['title']}\""),
+    ]
 
-        # три момента напоминаний
-        times = [
-            (start_at_utc - timedelta(minutes=15), f"Через 15 минут встреча: \"{title}\""),
-            (start_at_utc - timedelta(minutes=5),  f"Через 5 минут встреча: \"{title}\""),
-            (start_at_utc,                         f"Встреча началась: \"{title}\""),
-        ]
+    for notify_at, reminder in times:
+        # не ставим задачи в прошлое
+        if notify_at <= now:
+            continue
+        
+        notification_id = add_notification_db(event["event_id"], reminder, notify_at)
 
-        for run_at, reminder in times:
-            # не ставим задачи в прошлое
-            if run_at <= now:
-                continue
+        schedule_notification(notification_id, chat_id, job_queue)
 
-            job_queue.run_once(
-                reminder_callback,
-                when=run_at,
-                chat_id=chat_id,
-                data={"reminder": reminder, "meeting": meeting},
-                name=f"{chat_id}_{start_at.isoformat()}_{reminder}",
-            )
+
+def schedule_notification(notification_id, chat_id, job_queue):
+    notification = get_notification_by_id(notification_id)
+    notification = dict(notification)
+    
+    notification["start_at"] = datetime.fromisoformat(notification["start_at"])
+    notification["notify_at"] = datetime.fromisoformat(notification["notify_at"])
+
+    job = job_queue.run_once(
+        reminder_callback,
+        when=notification["notify_at"],
+        chat_id=chat_id,
+        data=notification,
+        name=f"{chat_id}_{notification['notify_at']}_{notification['reminder']}",
+    )
+
+    update_notification_by_id(notification_id, job.name, "scheduled")
 
 
 async def schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
     meetings = read_schedule_csv(FILE_SCHEDULE)
-    # meetings = [
-    #     {
-    #         "title": "Созвон с командой",
-    #         "start_at": datetime(2026, 1, 20, 18, 18, tzinfo=ZoneInfo("Europe/Moscow")),
-    #         "dion": "https://dion.vc/event/ilin-au-vtb"
-    #     },
-    # ]
 
-    schedule_meeting_jobs(meetings, chat_id, context.job_queue)
+    add_notifications_for_event(meetings, chat_id, context.job_queue)
 
     await update.message.reply_text(
         "Расписание загружено, напоминания будут за 15 минут, 5 минут и в момент начала."
     )
 
 
+def reschedule_events():
+    pass
+
+
 async def get_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     schedule = []
     message = ""
+    event_keys = ["event_id", "title", "location", "start_at"]
 
     for job in context.job_queue.jobs():
-        if job.data['meeting'] not in schedule:
-            schedule.append(job.data['meeting'])
+        event = {k: job.data[k] for k in event_keys if k in job.data}
+        # event = job.data
+        if event not in schedule:
+            schedule.append(event)
 
-    for meeting in schedule:
-        message += " ".join((meeting['start_at'].strftime('%Y-%m-%d %H:%M'), meeting['title'], meeting['dion'], "\n\n"))
+    for event in schedule:
+        start_at = event["start_at"].astimezone(ZoneInfo("Europe/Moscow")).strftime("%Y-%m-%d %H:%M")
+        message += " ".join([f"[{event['event_id']}]", start_at, f"\"{event['title']}\"", event["location"], "\n\n"])
 
     await update.message.reply_text(message or "Расписание пусто!")
 
@@ -160,6 +189,8 @@ async def clear_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Remove each job
     for job in all_jobs:
         job.remove()
+    
+    delete_all_notifications()
 
     await update.message.reply_text("Расписание очищено!")
 
@@ -167,7 +198,7 @@ async def clear_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def add_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
-    await set_conv_commands_for_chat(context.bot, chat_id)
+    await set_conv_commands(chat_id, context.bot)
     await update.message.reply_text("Введите дату события в формате ГГГГ-ММ-ДД (например, 2026-01-21)")
 
     return ASK_DATE
@@ -176,12 +207,12 @@ async def add_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def ask_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text.strip()
     try:
-        date = datetime.strptime(text, "%Y-%m-%d").date()
+        start_at_date = datetime.strptime(text, "%Y-%m-%d").date()
     except ValueError:
         await update.message.reply_text("Неверный формат даты. Попробуйте ещё раз: ГГГГ-ММ-ДД")
         return ASK_DATE
 
-    context.user_data["new_event"] = {"date": date}
+    context.user_data["new_event"] = {"start_at": start_at_date}
     await update.message.reply_text("Введите время события в формате ЧЧ:ММ (например, 14:30)")
     return ASK_TIME
 
@@ -189,12 +220,14 @@ async def ask_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def ask_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text.strip()
     try:
-        time = datetime.strptime(text, "%H:%M").time()
+        start_at_time = datetime.strptime(text, "%H:%M").time()
     except ValueError:
         await update.message.reply_text("Неверный формат времени. Попробуйте ещё раз: ЧЧ:ММ")
         return ASK_TIME
 
-    context.user_data["new_event"]["time"] = time
+    start_at = datetime.combine(context.user_data["new_event"]["start_at"], start_at_time)
+
+    context.user_data["new_event"]["start_at"] = start_at
     await update.message.reply_text("Введите название события")
     return ASK_TITLE
 
@@ -208,6 +241,8 @@ async def ask_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def ask_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    chat_id = update.effective_chat.id
+    bot = context.bot
     text = update.message.text.strip()
 
     location = text.split(" ")
@@ -216,24 +251,17 @@ async def ask_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     context.user_data["new_event"]["location"] = location
     event = context.user_data["new_event"]
 
-    start_at = datetime.combine(event['date'], event['time'])
+    event_id = add_event_db(chat_id, event["title"], event["location"], event["start_at"])
 
-    meetings = [{
-        "title": event['title'],
-        "start_at": start_at,
-        "dion": event['location']
-        },
-    ]
-
-    chat_id = update.effective_chat.id
-
-    schedule_meeting_jobs(meetings, chat_id, context.job_queue)
-    await set_base_commands_for_chat(context.bot, chat_id)
+    event["event_id"] = event_id
+    print(event)
+    add_notifications_for_event(event, chat_id, context.job_queue)
+    await reset_chat_commands(chat_id, bot)
 
     message = (
         "Событие добавлено:\n\n"
-        f"Дата: {event['date'].isoformat()}\n"
-        f"Время: {event['time'].strftime('%H:%M')}\n"
+        f"Дата: {event['start_at'].date().isoformat()}\n"
+        f"Время: {event['start_at'].time().strftime('%H:%M')}\n"
         f"Название: {event['title']}\n"
         f"Место: {event['location']}"
     )
@@ -246,8 +274,9 @@ async def ask_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     chat_id = update.effective_chat.id
+    bot = context.bot
 
-    await set_base_commands_for_chat(context.bot, chat_id)
+    await reset_chat_commands(chat_id, bot)
 
     await update.message.reply_text("Добавление события отменено.")
     context.user_data.pop("new_event", None)
@@ -255,7 +284,46 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 
+async def delete_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    
+    await set_conv_commands(chat_id, context.bot)
+    await update.message.reply_text("Введите ID события для удаления")
+
+    return ASK_EVENT_ID
+
+
+async def ask_event_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    chat_id = update.effective_chat.id
+    bot = context.bot
+    job_queue = context.job_queue
+
+    text = update.message.text.strip()
+    try:
+        event_id = int(text)
+    except ValueError:
+        await update.message.reply_text("Введено некорректное значение идентифкатора события.")
+        return ASK_EVENT_ID
+    
+    notifications = get_notifications_by_event_id(event_id)
+    
+    for notification in notifications:
+        for job in job_queue.get_jobs_by_name(notification['job_name']):
+            print(job)
+            job.schedule_removal()
+    
+    delete_event_by_id(event_id)
+    
+    await reset_chat_commands(chat_id, bot)
+    await update.message.reply_text(f"Событие [{event_id}] удалено.")
+
+    return ConversationHandler.END
+
+
 def main():
+    init_db(True if ENV == "TEST" else False)  # создаём таблицы, если их нет
+    # init_db(False)
+
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -263,7 +331,7 @@ def main():
     app.add_handler(CommandHandler("get_schedule", get_schedule))
     app.add_handler(CommandHandler("clear_schedule", clear_schedule))
 
-    add_conv_handler = ConversationHandler(
+    add_event_conv_handler = ConversationHandler(
         entry_points=[CommandHandler("add_event", add_event)],
         states={
             ASK_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_date)],
@@ -274,7 +342,16 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
-    app.add_handler(add_conv_handler)
+    delete_event_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("delete_event", delete_event)],
+        states={
+            ASK_EVENT_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_event_id)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    app.add_handler(add_event_conv_handler)
+    app.add_handler(delete_event_conv_handler)
 
     app.run_polling()  # запускает long polling и слушает апдейты
 
