@@ -23,7 +23,9 @@ from db import (
     get_notifications_by_event_id,
     delete_notification_by_job,
     delete_all_notifications,
-    get_notifation_by_job
+    get_notifation_by_job,
+    bulk_insert_events,
+    get_unschedule_events
 )
 
 
@@ -74,11 +76,12 @@ def read_schedule_csv(filename: str) -> list:
             tz = ZoneInfo(row.get("timezone", "Europe/Moscow"))
             dt = datetime.strptime(row["start_at"], "%Y-%m-%d %H:%M")
             dt = dt.replace(tzinfo=tz)
+            dt = dt.astimezone(timezone.utc)
 
             meetings.append({
                 "title": row["title"],
                 "start_at": dt,
-                "dion": row["dion"]
+                "location": row["location"]
             })
 
     return meetings
@@ -87,10 +90,10 @@ def read_schedule_csv(filename: str) -> list:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     bot = context.bot
-
     
     await reset_chat_commands(chat_id, bot)
     await set_base_commands(bot)
+
     await update.message.reply_text("Привет! Я бот-напоминалка.")
 
 
@@ -152,16 +155,27 @@ async def schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
     meetings = read_schedule_csv(FILE_SCHEDULE)
-
-    add_notifications_for_event(meetings, chat_id, context.job_queue)
+    bulk_insert_events(chat_id, meetings)
+    # add_notifications_for_event(meetings, chat_id, context.job_queue)
+    schedule_notifications(context.job_queue)
 
     await update.message.reply_text(
         "Расписание загружено, напоминания будут за 15 минут, 5 минут и в момент начала."
     )
 
 
-def reschedule_events():
-    pass
+def schedule_notifications(job_queue):
+    unscheduled_events = get_unschedule_events()
+    for unschedule_event in unscheduled_events:
+        chat_id = unschedule_event[1],
+        event = {
+            "event_id": unschedule_event[0],
+            "title": unschedule_event[2],
+            "start_at": datetime.strptime(unschedule_event[4][:16], "%Y-%m-%d %H:%M"),
+            "location": unschedule_event[3]
+            }
+        print(event["start_at"])
+        add_notifications_for_event(event, chat_id, job_queue)
 
 
 async def get_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):

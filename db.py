@@ -1,6 +1,8 @@
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone
+from typing import Sequence, Mapping
+
 
 DB_PATH = Path(__file__).parent / "data" / "bot.db"
 DB_PATH.parent.mkdir(exist_ok=True)
@@ -229,3 +231,42 @@ def get_events_for_chat_db(chat_id: int):
     conn.close()
 
     return rows
+
+
+def get_unschedule_events():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT * FROM events WHERE is_scheduled = ? ORDER BY start_at",
+        (0,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+
+    return rows
+
+
+def bulk_insert_events(chat_id: int, events: Sequence[Mapping]) -> int:
+    """Возвращает кол-во вставленных строк."""
+    if not events:
+        return 0
+
+    rows = []
+    for e in events:
+        # здесь можно сделать парсинг/валидацию даты
+        rows.append((chat_id, e["title"], e["location"], e["start_at"], datetime.now(tz=timezone.utc).isoformat(), 0))
+
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.executemany(
+            """
+            INSERT INTO events (chat_id, title, location, start_at, created_at, is_scheduled)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        conn.commit()
+        return cur.rowcount  # может быть -1 в sqlite, можно просто len(rows)
+    finally:
+        conn.close()
