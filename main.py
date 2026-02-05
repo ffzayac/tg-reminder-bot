@@ -1,13 +1,14 @@
 import csv
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date
 from dotenv import load_dotenv
-from telegram import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, Update
+from telegram import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
     CommandHandler,
     ConversationHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
@@ -17,6 +18,7 @@ from db import (
     init_db,
     add_event_db,
     add_notification_db,
+    get_event_by_id,
     get_notification_by_id,
     update_notification_by_id,
     delete_event_by_id,
@@ -25,7 +27,9 @@ from db import (
     delete_all_notifications,
     get_notifation_by_job,
     bulk_insert_events,
-    get_unschedule_events
+    get_unschedule_events,
+    update_event_status_by_id,
+    delete_all_events
 )
 
 
@@ -77,12 +81,13 @@ def read_schedule_csv(filename: str) -> list:
             dt = datetime.strptime(row["start_at"], "%Y-%m-%d %H:%M")
             dt = dt.replace(tzinfo=tz)
             dt = dt.astimezone(timezone.utc)
-
-            meetings.append({
-                "title": row["title"],
-                "start_at": dt,
-                "location": row["location"]
-            })
+            
+            if dt > datetime.now(timezone.utc):
+                meetings.append({
+                    "title": row["title"],
+                    "start_at": dt,
+                    "location": row["location"]
+                })
 
     return meetings
 
@@ -112,43 +117,44 @@ async def reminder_callback(context: ContextTypes.DEFAULT_TYPE):
         delete_notification_by_job(job.name)
 
 
-def add_notifications_for_event(event, chat_id, job_queue):
-    now = datetime.now(timezone.utc)
-    start_at_utc = event["start_at"].astimezone(timezone.utc)
+def add_notifications_for_event(event_id, job_queue):
+    event_row = get_event_by_id(event_id)
+    
+    start_at_utc = datetime.strptime(event_row["start_at"][:16], "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
 
     # три момента напоминаний
     times = [
-        (start_at_utc - timedelta(minutes=15), f"Через 15 минут встреча: \"{event['title']}\""),
-        (start_at_utc - timedelta(minutes=5),  f"Через 5 минут встреча: \"{event['title']}\""),
-        (start_at_utc,                         f"Встреча началась: \"{event['title']}\""),
+        (start_at_utc - timedelta(minutes=15), f"Через 15 минут встреча: \"{event_row['title']}\""),
+        (start_at_utc - timedelta(minutes=5),  f"Через 5 минут встреча: \"{event_row['title']}\""),
+        (start_at_utc,                         f"Встреча началась: \"{event_row['title']}\""),
     ]
+    
+    now = datetime.now(timezone.utc)
 
     for notify_at, reminder in times:
         # не ставим задачи в прошлое
         if notify_at <= now:
             continue
         
-        notification_id = add_notification_db(event["event_id"], reminder, notify_at)
-
-        schedule_notification(notification_id, chat_id, job_queue)
-
-
-def schedule_notification(notification_id, chat_id, job_queue):
-    notification = get_notification_by_id(notification_id)
-    notification = dict(notification)
-    
-    notification["start_at"] = datetime.fromisoformat(notification["start_at"])
-    notification["notify_at"] = datetime.fromisoformat(notification["notify_at"])
-
-    job = job_queue.run_once(
+        job = job_queue.run_once(
         reminder_callback,
-        when=notification["notify_at"],
-        chat_id=chat_id,
-        data=notification,
-        name=f"{chat_id}_{notification['notify_at']}_{notification['reminder']}",
-    )
+        when=notify_at,
+        chat_id=event_row["chat_id"],
+        data={
+            "event_id": event_id,
+            "title": event_row["title"],
+            "start_at": start_at_utc,
+            "reminder": reminder,
+            "location": event_row["location"]
+        },
+        name=f"{event_row['chat_id']}_{notify_at}_{reminder}",
+        )
 
-    update_notification_by_id(notification_id, job.name, "scheduled")
+        notification_id = add_notification_db(event_id, reminder, notify_at, job.name)
+        update_event_status_by_id(event_id, 1)
+
+    
+    return notification_id
 
 
 async def schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -156,7 +162,7 @@ async def schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     meetings = read_schedule_csv(FILE_SCHEDULE)
     bulk_insert_events(chat_id, meetings)
-    # add_notifications_for_event(meetings, chat_id, context.job_queue)
+
     schedule_notifications(context.job_queue)
 
     await update.message.reply_text(
@@ -166,16 +172,9 @@ async def schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def schedule_notifications(job_queue):
     unscheduled_events = get_unschedule_events()
+    
     for unschedule_event in unscheduled_events:
-        chat_id = unschedule_event[1],
-        event = {
-            "event_id": unschedule_event[0],
-            "title": unschedule_event[2],
-            "start_at": datetime.strptime(unschedule_event[4][:16], "%Y-%m-%d %H:%M"),
-            "location": unschedule_event[3]
-            }
-        print(event["start_at"])
-        add_notifications_for_event(event, chat_id, job_queue)
+        add_notifications_for_event(unschedule_event["id"], job_queue)
 
 
 async def get_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -204,22 +203,44 @@ async def clear_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for job in all_jobs:
         job.remove()
     
-    delete_all_notifications()
+    delete_all_events()
 
     await update.message.reply_text("Расписание очищено!")
 
 
 async def add_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    today = date.today()
+    tomorrow = today + timedelta(days=1)
+
+    # Готовим callback_data: по ним date_from_button поймёт, что выбрано
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                text=f"Сегодня ({today.isoformat()})",
+                callback_data=f"date:{today.isoformat()}",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"Завтра ({tomorrow.isoformat()})",
+                callback_data=f"date:{tomorrow.isoformat()}",
+            )
+        ],
+    ]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     chat_id = update.effective_chat.id
 
     await set_conv_commands(chat_id, context.bot)
-    await update.message.reply_text("Введите дату события в формате ГГГГ-ММ-ДД (например, 2026-01-21)")
+    await update.message.reply_text("Введите дату события в формате ГГГГ-ММ-ДД (например, 2026-01-21)", reply_markup=reply_markup)
 
     return ASK_DATE
 
 
 async def ask_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text.strip()
+    
     try:
         start_at_date = datetime.strptime(text, "%Y-%m-%d").date()
     except ValueError:
@@ -228,6 +249,22 @@ async def ask_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     context.user_data["new_event"] = {"start_at": start_at_date}
     await update.message.reply_text("Введите время события в формате ЧЧ:ММ (например, 14:30)")
+    return ASK_TIME
+
+
+async def ask_date_from_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка выбора даты через кнопку."""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data  # например, "date:2026-02-05"
+    _, value = data.split(":", 1)
+    chosen_date = datetime.strptime(value, "%Y-%m-%d").date()  # строка "2026-02-05"
+
+    # Здесь можно сохранить дату в context.user_data или в БД
+    context.user_data["new_event"] = {"start_at": chosen_date}
+
+    await query.message.reply_text("Введите время события в формате ЧЧ:ММ (например, 14:30)")
     return ASK_TIME
 
 
@@ -268,8 +305,8 @@ async def ask_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     event_id = add_event_db(chat_id, event["title"], event["location"], event["start_at"])
 
     event["event_id"] = event_id
-    print(event)
-    add_notifications_for_event(event, chat_id, context.job_queue)
+
+    add_notifications_for_event(event_id, context.job_queue)
     await reset_chat_commands(chat_id, bot)
 
     message = (
@@ -348,7 +385,10 @@ def main():
     add_event_conv_handler = ConversationHandler(
         entry_points=[CommandHandler("add_event", add_event)],
         states={
-            ASK_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_date)],
+            ASK_DATE: [
+                CallbackQueryHandler(ask_date_from_button, pattern=r"^date:"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, ask_date),
+            ],
             ASK_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_time)],
             ASK_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_title)],
             ASK_LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_location)],
