@@ -24,7 +24,7 @@ def init_db(reset: bool = False):
     if reset:
         cur.execute("DROP TABLE IF EXISTS notifications;")
         cur.execute("DROP TABLE IF EXISTS events;")
-    
+
     # таблица событий
     cur.execute(
         """
@@ -54,7 +54,7 @@ def init_db(reset: bool = False):
         );
         """
     )
-    
+
     # удаляем просроченные события
     cur.execute(
         "DELETE FROM events WHERE start_at < datetime('now')"
@@ -126,9 +126,9 @@ def get_notification_by_id(notification_id: int):
         """
         SELECT
             *
-        FROM 
-            notifications 
-        INNER JOIN 
+        FROM
+            notifications
+        INNER JOIN
             events ON notifications.event_id = events.id
         WHERE notifications.id = ?
         """,
@@ -163,8 +163,8 @@ def get_notifications_by_event_id(event_id: int):
         """
         SELECT
             *
-        FROM 
-            notifications 
+        FROM
+            notifications
         WHERE event_id = ?
         """,
         (event_id,),
@@ -182,9 +182,9 @@ def get_notifation_by_job(job_name):
         """
         SELECT
             *
-        FROM 
-            notifications 
-        INNER JOIN 
+        FROM
+            notifications
+        INNER JOIN
             events ON notifications.event_id = events.id
         WHERE notifications.job_name = ?
         """,

@@ -19,12 +19,9 @@ from db import (
     add_event_db,
     add_notification_db,
     get_event_by_id,
-    get_notification_by_id,
-    update_notification_by_id,
     delete_event_by_id,
     get_notifications_by_event_id,
     delete_notification_by_job,
-    delete_all_notifications,
     get_notifation_by_job,
     bulk_insert_events,
     get_unschedule_events,
@@ -46,7 +43,7 @@ BASE_COMMANDS = [
     BotCommand("delete_event", "удалить событие"),
     BotCommand("clear_schedule", "очистить расписание"),
     BotCommand("schedule", "запланировать"),
-    BotCommand("get_schedule", "получить расписание"), 
+    BotCommand("get_schedule", "получить расписание"),
 ]
 
 CONV_COMMANDS = [
@@ -81,7 +78,7 @@ def read_schedule_csv(filename: str) -> list:
             dt = datetime.strptime(row["start_at"], "%Y-%m-%d %H:%M")
             dt = dt.replace(tzinfo=tz)
             dt = dt.astimezone(timezone.utc)
-            
+
             if dt > datetime.now(timezone.utc):
                 meetings.append({
                     "title": row["title"],
@@ -95,7 +92,7 @@ def read_schedule_csv(filename: str) -> list:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     bot = context.bot
-    
+
     await reset_chat_commands(chat_id, bot)
     await set_base_commands(bot)
 
@@ -119,7 +116,6 @@ async def reminder_callback(context: ContextTypes.DEFAULT_TYPE):
 
 def add_notifications_for_event(event_id, job_queue):
     event_row = get_event_by_id(event_id)
-    
     start_at_utc = datetime.strptime(event_row["start_at"][:16], "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
 
     # три момента напоминаний
@@ -128,32 +124,31 @@ def add_notifications_for_event(event_id, job_queue):
         (start_at_utc - timedelta(minutes=5),  f"Через 5 минут встреча: \"{event_row['title']}\""),
         (start_at_utc,                         f"Встреча началась: \"{event_row['title']}\""),
     ]
-    
+
     now = datetime.now(timezone.utc)
 
     for notify_at, reminder in times:
         # не ставим задачи в прошлое
         if notify_at <= now:
             continue
-        
+
         job = job_queue.run_once(
-        reminder_callback,
-        when=notify_at,
-        chat_id=event_row["chat_id"],
-        data={
-            "event_id": event_id,
-            "title": event_row["title"],
-            "start_at": start_at_utc,
-            "reminder": reminder,
-            "location": event_row["location"]
-        },
-        name=f"{event_row['chat_id']}_{notify_at}_{reminder}",
+            reminder_callback,
+            when=notify_at,
+            chat_id=event_row["chat_id"],
+            data={
+                "event_id": event_id,
+                "title": event_row["title"],
+                "start_at": start_at_utc,
+                "reminder": reminder,
+                "location": event_row["location"]
+            },
+            name=f"{event_row['chat_id']}_{notify_at}_{reminder}",
         )
 
         notification_id = add_notification_db(event_id, reminder, notify_at, job.name)
         update_event_status_by_id(event_id, 1)
 
-    
     return notification_id
 
 
@@ -172,7 +167,7 @@ async def schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def schedule_notifications(job_queue):
     unscheduled_events = get_unschedule_events()
-    
+
     for unschedule_event in unscheduled_events:
         add_notifications_for_event(unschedule_event["id"], job_queue)
 
@@ -202,7 +197,7 @@ async def clear_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Remove each job
     for job in all_jobs:
         job.remove()
-    
+
     delete_all_events()
 
     await update.message.reply_text("Расписание очищено!")
@@ -229,7 +224,7 @@ async def add_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
 
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
+
     chat_id = update.effective_chat.id
 
     await set_conv_commands(chat_id, context.bot)
@@ -240,7 +235,7 @@ async def add_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def ask_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text.strip()
-    
+
     try:
         start_at_date = datetime.strptime(text, "%Y-%m-%d").date()
     except ValueError:
@@ -337,7 +332,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def delete_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    
+
     await set_conv_commands(chat_id, context.bot)
     await update.message.reply_text("Введите ID события для удаления")
 
@@ -355,16 +350,16 @@ async def ask_event_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     except ValueError:
         await update.message.reply_text("Введено некорректное значение идентифкатора события.")
         return ASK_EVENT_ID
-    
+
     notifications = get_notifications_by_event_id(event_id)
-    
+
     for notification in notifications:
         for job in job_queue.get_jobs_by_name(notification['job_name']):
             print(job)
             job.schedule_removal()
-    
+
     delete_event_by_id(event_id)
-    
+
     await reset_chat_commands(chat_id, bot)
     await update.message.reply_text(f"Событие [{event_id}] удалено.")
 
