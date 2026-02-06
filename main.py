@@ -36,6 +36,7 @@ DION_URL = "https://dion.vc/event/"
 ENV = os.getenv("ENV", "PROD")
 BOT_TOKEN = os.getenv("PROD_BOT_TOKEN") if ENV == "PROD" else os.getenv("TEST_BOT_TOKEN")
 FILE_SCHEDULE = os.getenv("FILE_SCHEDULE")
+FAVORITE_LOCATIONS = os.getenv("FAVORITE_LOCATIONS", "").split(",")
 ASK_DATE, ASK_TIME, ASK_TITLE, ASK_LOCATION, ASK_EVENT_ID = range(5)
 
 BASE_COMMANDS = [
@@ -282,7 +283,21 @@ async def ask_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text.strip()
 
     context.user_data["new_event"]["title"] = text
-    await update.message.reply_text("Введите место события")
+    keyboard = []
+    
+    for location in FAVORITE_LOCATIONS:
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{location}",
+                    callback_data=f"location:{location}",
+                )
+            ]
+        )
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text("Введите место события", reply_markup=reply_markup)
     return ASK_LOCATION
 
 
