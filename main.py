@@ -23,7 +23,7 @@ from db import (
     delete_event_by_id,
     get_notifications_by_event_id,
     delete_notification_by_job,
-    get_notifation_by_job,
+    get_notification_by_job,
     bulk_insert_events,
     get_unschedule_events,
     update_event_status_by_id,
@@ -36,10 +36,11 @@ load_dotenv()  # читает .env в текущей директории
 DION_URL = "https://dion.vc/event/"
 ENV = os.getenv("ENV", "PROD")
 BOT_TOKEN = os.getenv("PROD_BOT_TOKEN") if ENV == "PROD" else os.getenv("TEST_BOT_TOKEN")
-ASK_DATE, ASK_TIME, ASK_TITLE, ASK_LOCATION, ASK_EVENT_ID = range(5)
+ASK_DATE, ASK_TIME, ASK_TITLE, ASK_LOCATION, ASK_EVENT_ID, ASK_EDIT_EVENT_ID, ASK_EDIT_DATE, ASK_EDIT_TIME, ASK_EDIT_TITLE, ASK_EDIT_LOCATION = range(10)
 
 BASE_COMMANDS = [
     BotCommand("add_event", "добавить событие"),
+    BotCommand("edit_event", "изменить событие"),
     BotCommand("delete_event", "удалить событие"),
     BotCommand("clear_schedule", "очистить расписание"),
     BotCommand("schedule", "запланировать"),
@@ -103,7 +104,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def reminder_callback(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
-    notification = get_notifation_by_job(job.name)
+    notification = get_notification_by_job(job.name)
     cnt = len(get_notifications_by_event_id(notification["event_id"]))
 
     start_at = job.data['start_at'].astimezone(ZoneInfo("Europe/Moscow")).strftime("%Y-%m-%d %H:%M")
@@ -422,6 +423,44 @@ async def ask_event_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return ConversationHandler.END
 
 
+async def edit_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+
+    await set_conv_commands(chat_id, context.bot)
+    await update.message.reply_text("Введите ID события для изменения")
+
+    return ASK_EDIT_EVENT_ID
+
+
+async def ask_edit_event_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    try:
+        event_id = int(text)
+    except ValueError:
+        await update.message.reply_text("Введено некорректное значение идентифкатора события.")
+        return ASK_EVENT_ID
+    
+    event_row = get_event_by_id(event_id)
+
+    context.user_data["event"] = {"title": event_row["title"]}
+
+    await update.message.reply_text("Введите новое название события")
+
+    return ASK_EDIT_TITLE
+
+
+async def ask_edit_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    # print(context.user_data["event"])
+    return ConversationHandler.END
+
+
+def refresh_event(event_id):
+    notifications = get_notifications_by_event_id(event_id)
+    # delete_notification_by_job
+    # get_notification_by_job
+    
+
+
 def main():
     init_db(True if ENV == "TEST" else False)  # создаём таблицы, если их нет
     # init_db(False)
@@ -458,8 +497,27 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
+    edit_event_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("edit_event", edit_event)],
+        states={
+            ASK_EDIT_EVENT_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_edit_event_id)],
+            ASK_EDIT_DATE: [
+                CallbackQueryHandler(ask_date_from_button, pattern=r"^date:"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, ask_date),
+            ],
+            ASK_EDIT_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_time)],
+            ASK_EDIT_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_edit_title)],
+            ASK_EDIT_LOCATION: [
+                CallbackQueryHandler(ask_location_from_button, pattern=r"^location:"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, ask_location),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
     app.add_handler(add_event_conv_handler)
     app.add_handler(delete_event_conv_handler)
+    app.add_handler(edit_event_conv_handler)
 
     app.run_polling()  # запускает long polling и слушает апдейты
 

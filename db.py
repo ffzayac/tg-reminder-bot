@@ -175,7 +175,7 @@ def get_notifications_by_event_id(event_id: int):
     return rows
 
 
-def get_notifation_by_job(job_name):
+def get_notification_by_job(job_name):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
