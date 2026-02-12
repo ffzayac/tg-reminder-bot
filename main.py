@@ -284,7 +284,7 @@ async def ask_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     context.user_data["new_event"]["title"] = text
     keyboard = []
-    
+
     for location in FAVORITE_LOCATIONS:
         keyboard.append(
             [
@@ -319,7 +319,7 @@ async def ask_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     add_notifications_for_event(event_id, context.job_queue)
     await reset_chat_commands(chat_id, bot)
 
-    message = (
+    reply_message = (
         "Событие добавлено:\n\n"
         f"Дата: {event['start_at'].date().isoformat()}\n"
         f"Время: {event['start_at'].time().strftime('%H:%M')}\n"
@@ -327,7 +327,43 @@ async def ask_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         f"Место: {event['location']}"
     )
 
-    await update.message.reply_text(message)
+    await update.message.reply_text(reply_message)
+    context.user_data.pop("new_event", None)
+
+    return ConversationHandler.END
+
+
+async def ask_location_from_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка выбора места через кнопку."""
+    chat_id = update.effective_chat.id
+    bot = context.bot
+
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data  # например, "location:fazaichenko"
+    _, value = data.split(":", 1)
+    location = DION_URL + value
+
+    context.user_data["new_event"]["location"] = location
+    event = context.user_data["new_event"]
+
+    event_id = add_event_db(chat_id, event["title"], event["location"], event["start_at"])
+
+    event["event_id"] = event_id
+
+    add_notifications_for_event(event_id, context.job_queue)
+    await reset_chat_commands(chat_id, bot)
+
+    reply_message = (
+        "Событие добавлено:\n\n"
+        f"Дата: {event['start_at'].date().isoformat()}\n"
+        f"Время: {event['start_at'].time().strftime('%H:%M')}\n"
+        f"Название: {event['title']}\n"
+        f"Место: {event['location']}"
+    )
+
+    await query.message.reply_text(reply_message)
     context.user_data.pop("new_event", None)
 
     return ConversationHandler.END
@@ -401,7 +437,10 @@ def main():
             ],
             ASK_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_time)],
             ASK_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_title)],
-            ASK_LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_location)],
+            ASK_LOCATION: [
+                CallbackQueryHandler(ask_location_from_button, pattern=r"^location:"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, ask_location),
+            ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
