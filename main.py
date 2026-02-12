@@ -1,3 +1,4 @@
+import configparser
 import csv
 import os
 from datetime import datetime, timedelta, timezone, date
@@ -35,8 +36,6 @@ load_dotenv()  # читает .env в текущей директории
 DION_URL = "https://dion.vc/event/"
 ENV = os.getenv("ENV", "PROD")
 BOT_TOKEN = os.getenv("PROD_BOT_TOKEN") if ENV == "PROD" else os.getenv("TEST_BOT_TOKEN")
-FILE_SCHEDULE = os.getenv("FILE_SCHEDULE")
-FAVORITE_LOCATIONS = os.getenv("FAVORITE_LOCATIONS", "").split(",")
 ASK_DATE, ASK_TIME, ASK_TITLE, ASK_LOCATION, ASK_EVENT_ID = range(5)
 
 BASE_COMMANDS = [
@@ -50,6 +49,8 @@ BASE_COMMANDS = [
 CONV_COMMANDS = [
     BotCommand("cancel", "отменить добавление"),
 ]
+
+config = configparser.ConfigParser()
 
 
 async def set_base_commands(bot):
@@ -156,7 +157,10 @@ def add_notifications_for_event(event_id, job_queue):
 async def schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
-    meetings = read_schedule_csv(FILE_SCHEDULE)
+    config.read("settings.ini")
+    file_schedule = config["app"]["file_schedule"]
+
+    meetings = read_schedule_csv(file_schedule)
     bulk_insert_events(chat_id, meetings)
 
     schedule_notifications(context.job_queue)
@@ -214,9 +218,7 @@ async def add_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton(
                 text=f"Сегодня ({today.isoformat()})",
                 callback_data=f"date:{today.isoformat()}",
-            )
-        ],
-        [
+            ),
             InlineKeyboardButton(
                 text=f"Завтра ({tomorrow.isoformat()})",
                 callback_data=f"date:{tomorrow.isoformat()}",
@@ -285,7 +287,10 @@ async def ask_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["new_event"]["title"] = text
     keyboard = []
 
-    for location in FAVORITE_LOCATIONS:
+    config.read("settings.ini")
+    favorite_locations = config["app"]["favorite_locations"].split(",")
+
+    for location in favorite_locations:
         keyboard.append(
             [
                 InlineKeyboardButton(

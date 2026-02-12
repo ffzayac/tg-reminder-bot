@@ -1,3 +1,6 @@
+# ini settings
+*.ini
+
 # sqlite db file
 *.db
 
