@@ -57,7 +57,7 @@ def init_db(reset: bool = False):
 
     # удаляем просроченные события
     cur.execute(
-        "DELETE FROM events WHERE start_at < datetime('now')"
+        "DELETE FROM events WHERE start_at < DATETIME('now')"
     )
 
     # чистим таблицу с уведомлениями
@@ -84,6 +84,20 @@ def add_event_db(chat_id: int, title: str, location: str, start_at: datetime) ->
     conn.close()
 
     return event_id
+
+
+def delete_expired_events():
+    conn = get_connection()
+    # для каскадного удаления
+    conn.execute("PRAGMA foreign_keys = ON")
+    cur = conn.cursor()
+    cur.execute(
+        "DELETE FROM events WHERE start_at < DATETIME('now')",
+    )
+    conn.commit()
+    deleted = cur.rowcount
+    conn.close()
+    return deleted
 
 
 def get_event_by_id(event_id: int):
@@ -175,7 +189,7 @@ def get_notifications_by_event_id(event_id: int):
     return rows
 
 
-def get_notifation_by_job(job_name):
+def get_notification_by_job(job_name):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
@@ -290,6 +304,21 @@ def get_unschedule_events():
     conn.close()
 
     return rows
+
+
+def set_all_events_unscheduled():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE events SET is_scheduled = 0
+        """,
+    )
+    conn.commit()
+    updated = cur.rowcount
+    conn.close()
+
+    return updated
 
 
 def bulk_insert_events(chat_id: int, events: Sequence[Mapping]) -> int:
