@@ -23,11 +23,12 @@ from db import (
     delete_event_by_id,
     get_notifications_by_event_id,
     delete_notification_by_job,
-    get_notifation_by_job,
+    get_notification_by_job,
     bulk_insert_events,
     get_unschedule_events,
     update_event_status_by_id,
-    delete_all_events
+    delete_all_events,
+    set_all_events_unscheduled
 )
 
 
@@ -96,14 +97,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot = context.bot
 
     await reset_chat_commands(chat_id, bot)
-    await set_base_commands(bot)
+    # await set_base_commands(bot)
 
     await update.message.reply_text("Привет! Я бот-напоминалка.")
 
 
 async def reminder_callback(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
-    notification = get_notifation_by_job(job.name)
+    notification = get_notification_by_job(job.name)
     cnt = len(get_notifications_by_event_id(notification["event_id"]))
 
     start_at = job.data['start_at'].astimezone(ZoneInfo("Europe/Moscow")).strftime("%Y-%m-%d %H:%M")
@@ -312,7 +313,7 @@ async def ask_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     text = update.message.text.strip()
 
     location = text.split(" ")
-    location = DION_URL + location[1] if len(location) == 2 and location[0] == "dion" else text
+    location = DION_URL + location[1] if len(location) == 2 and str.lower(location[0]) == "dion" else text
 
     context.user_data["new_event"]["location"] = location
     event = context.user_data["new_event"]
@@ -422,11 +423,36 @@ async def ask_event_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return ConversationHandler.END
 
 
-def main():
+async def restore_scheduled_jobs(application):
+    # сбрасываем у всех событий флаг is_scheduled = 0
+    set_all_events_unscheduled()
+
+    # планируем все незапланированные события
+    schedule_notifications(application.job_queue)
+
+
+async def post_init(application: Application) -> None:
+    bot = application.bot
+    # 1. Устанавливаем общие команды для всех
+    # await reset_chat_commands(chat_id, bot)
+    await set_base_commands(bot)
+
+    # 2. инициализируем БД, удаляем все уведомления, удаляем неактуальные события
     init_db(True if ENV == "TEST" else False)  # создаём таблицы, если их нет
     # init_db(False)
 
-    app = Application.builder().token(BOT_TOKEN).build()
+    # 3. Восстанавливаем уведомления
+    await restore_scheduled_jobs(application)
+
+
+def main():
+
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .post_init(post_init) # Бот сам вызовет это при старте
+        .build()
+    )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("schedule", schedule))
