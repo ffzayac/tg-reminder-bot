@@ -170,6 +170,8 @@ async def schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Расписание загружено, напоминания будут за 15 минут, 5 минут и в момент начала."
     )
 
+    # await get_schedule(update, context)
+
 
 def schedule_notifications(job_queue):
     unscheduled_events = get_unschedule_events()
